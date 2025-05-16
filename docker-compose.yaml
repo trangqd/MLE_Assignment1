@@ -1,0 +1,21 @@
+services:
+  assignment1_jlab:
+    container_name: assignment1-jlab
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace          
+    volumes:
+      - "C:/Users/Mylaptop/OneDrive/Documents/SMU COURSES/MACHINE LEARNING ENGINEERING/Assignment_1:/workspace"
+    ports:
+      - "8890:8888"
+    command:
+      - jupyter
+      - lab
+      - --ip=0.0.0.0
+      - --port=8888
+      - --no-browser
+      - --allow-root
+      - --notebook-dir=/workspace    
+      - --ServerApp.token=''
+      - --ServerApp.disable_check_xsrf=True

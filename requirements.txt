@@ -1,0 +1,6 @@
+jupyterlab
+pyspark==3.5.1         
+pandas
+openpyxl              
+pyarrow  
+datetime
