@@ -42,7 +42,7 @@ def process_bronze(dates_str_lst: Iterable[str], spark: SparkSession) -> None:
             snap_dt = datetime.strptime(ds, "%Y-%m-%d")
             slice_df = sdf_full.filter(F.col(PARTITION_COL) == snap_dt)
 
-            if slice_df.rdd.isEmpty():
+            if not slice_df.head(1):
                 print(f"[{table}] {ds} – 0 rows (skip)")
                 continue
 

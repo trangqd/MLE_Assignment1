@@ -5,6 +5,7 @@ from datetime import datetime
 
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.types import IntegerType, FloatType, DateType
+from pyspark.sql.functions import col 
 
 BRONZE_ROOT = Path("data_mart/bronze")
 SILVER_ROOT = Path("data_mart/silver")
@@ -17,7 +18,6 @@ def credit_age_to_months(col_name: str = "Credit_History_Age") -> F.Column:
     yrs = F.regexp_extract(F.col(col_name), Y_RE, 1).cast(IntegerType())
     mth = F.regexp_extract(F.col(col_name), M_RE, 1).cast(IntegerType())
     return (yrs * 12 + mth).cast(IntegerType())
-
 
 # 1. LMS Loan Daily
 def augment_lms(df):
@@ -34,11 +34,7 @@ def augment_lms(df):
               F.when(F.col("overdue_amt") > 0,
                      F.datediff(F.col("snapshot_date"), F.col("first_missed_date")))
                .otherwise(0).cast(IntegerType()))
-          .withColumn("remaining_term",  F.col("tenure") - F.col("installment_num"))
-          .withColumn("days_since_origination",
-              F.datediff(F.col("snapshot_date"), F.col("loan_start_date")))
     )
-
 
 # 2. Click-stream
 def augment_clickstream(df):
@@ -49,7 +45,6 @@ def augment_clickstream(df):
         df.withColumn("clickstream_mean",
             sum(F.col(c) for c in feat_cols) / len(feat_cols))
     )
-
 
 # 3. Customer Attributes
 def augment_attributes(df):
@@ -74,7 +69,6 @@ def augment_attributes(df):
 
 # 4. Financials
 def augment_financials(df):
-    # 1) Format fixes
     df = (df
         .withColumn("Annual_Income",
             F.regexp_replace("Annual_Income", r"_$", "").cast(FloatType()))
@@ -94,8 +88,10 @@ def augment_financials(df):
         .withColumn("Payment_Behaviour",
             F.when(F.col("Payment_Behaviour").rlike("^[A-Za-z0-9_ ,]+$"), F.col("Payment_Behaviour"))
              .otherwise(None))
+        .withColumn("Monthly_Balance", col("Monthly_Balance").cast(FloatType()))
+        .withColumn("Total_EMI_per_month", col("Total_EMI_per_month").cast(FloatType()))
+        .withColumn("Interest_Rate", col("Interest_Rate").cast(FloatType()))
     )
-    # 2) Non-sense values handling 
     df = (df
         .withColumn("Num_of_Loan",
             F.when(F.col("Num_of_Loan") < 0, None).otherwise(F.col("Num_of_Loan")))
@@ -105,7 +101,6 @@ def augment_financials(df):
         .withColumn("Num_Bank_Accounts",
             F.when(F.col("Num_Bank_Accounts") < 0, None)
              .otherwise(F.col("Num_Bank_Accounts").cast(IntegerType()))))
-    # 3) Feature aug 
     return (df
         .withColumn("is_min_pay_only",
             F.when(F.col("Payment_of_Min_Amount") == "Yes", 1)
@@ -120,12 +115,7 @@ def augment_financials(df):
             F.when(F.col("Annual_Income") > 0,
                    F.col("Outstanding_Debt") / F.col("Annual_Income"))
              .otherwise(None).cast(FloatType()))
-        .withColumn("card_num_suspicious",
-            F.when(F.col("Num_Credit_Card") > 20, 1).otherwise(0))
-        .withColumn("bank_num_suspicious",
-            F.when(F.col("Num_Bank_Accounts") > 20, 1).otherwise(0))
     )
-
 
 TABLES: Dict[str, callable] = {
     "lms_loan_daily":       augment_lms,
@@ -139,11 +129,16 @@ def process_one(table: str, snapshot: str, spark: SparkSession):
     if not src.exists():
         print(f"[SKIP] {src} not found.")
         return
+
     sdf = spark.read.option("header", "true").csv(str(src))
     sdf = TABLES[table](sdf)
-    out = SILVER_ROOT / table / f"silver_{table}_{snapshot.replace('-', '_')}.parquet"
-    sdf.write.mode("overwrite").parquet(str(out))
-    print(f"[WRITE] {table} → {out}")
+
+    out_dir = SILVER_ROOT / table
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_csv = out_dir / f"silver_{table}_{snapshot.replace('-', '_')}.csv"
+    sdf.toPandas().to_csv(out_csv, index=False)
+    print(f"[WRITE] {table} → {out_csv}")
 
 def process_silver_all(snapshot: str, spark: SparkSession):
     for tbl in TABLES:
