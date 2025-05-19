@@ -20,9 +20,7 @@ def engineer_features(df):
         "High_spent_Medium_value_payments": 4,
         "High_spent_Large_value_payments": 5,
     }
-    age_band_map = {
-        "18-24": 0, "25-34": 1, "35-44": 2, "45-54": 3, "55+": 4
-    }
+    age_band_map = {"18-24": 0, "25-34": 1, "35-44": 2, "45-54": 3, "55+": 4}
 
     df["Balance_to_EMI_Ratio"] = df["Monthly_Balance"] / df["Total_EMI_per_month"].replace(0, np.nan)
     df["Investment_to_Income_Ratio"] = df["Amount_invested_monthly"] / df["Monthly_Inhand_Salary"].replace(0, np.nan)
@@ -44,13 +42,12 @@ def apply_capping_and_flags(df):
 def engineer_lag_rolling_features(df):
     df = df.sort_values(["Customer_ID", "snapshot_date"])
     df["payment_ratio"] = df["paid_amt"] / df["due_amt"].replace(0, np.nan)
-    df["shortfall"] = (df["due_amt"] - df["paid_amt"]).clip(lower=0)
-    df["missed_payment"] = (df["paid_amt"] < df["due_amt"]).astype(int)
+    df["shortfall"] = (df["due_amt"] - df["paid_amt"]).clip(lower=0) 
     df["full_payment"] = (df["paid_amt"] >= df["due_amt"]).astype(int)
     df["overpayment"] = (df["paid_amt"] - df["due_amt"]).clip(lower=0)
+    df["missed_payment"] = (df["paid_amt"] < df["due_amt"]).astype(int)
 
     df_group = df.groupby("Customer_ID")
-
     df["rolling_avg_payment_ratio_3m"] = (
         df_group["payment_ratio"].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
     )
@@ -61,7 +58,6 @@ def engineer_lag_rolling_features(df):
         df_group["dpd"].rolling(3, min_periods=1).max().reset_index(level=0, drop=True)
     )
 
-    # Consecutive missed payments
     def compute_consecutive_missed(x):
         streak = 0
         result = []
@@ -73,10 +69,7 @@ def engineer_lag_rolling_features(df):
             result.append(streak)
         return result
 
-    df["consecutive_missed_payments"] = (
-        df_group["missed_payment"].transform(compute_consecutive_missed)
-    )
-
+    df["consecutive_missed_payments"] = df_group["missed_payment"].transform(compute_consecutive_missed)
     return df
 
 def split_train_test(df, test_start="2025-01-01"):
@@ -84,6 +77,16 @@ def split_train_test(df, test_start="2025-01-01"):
     train = df[df["snapshot_date"] < test_start].copy()
     test = df[df["snapshot_date"] >= test_start].copy()
     return train, test
+
+def save_partitioned_by_month(df, prefix, subfolder):
+    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
+    folder = GOLD_OUTPUT_DIR / subfolder
+    folder.mkdir(parents=True, exist_ok=True)
+
+    for period, group in df.groupby(df["snapshot_date"].dt.to_period("M")):
+        file_path = folder / f"{prefix}_{period}.csv"
+        group.to_csv(file_path, index=False)
+        print(f"[✓] Saved: {file_path} — {group.shape[0]} rows")
 
 def load_merged_silver_table(table_name):
     table_path = SILVER_ROOT / table_name

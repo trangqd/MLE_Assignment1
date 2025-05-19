@@ -6,3 +6,4 @@ datetime
 pandas==2.2.2
 setuptools==69.2.0
 wheel==0.42.0
+numpy==1.26.4
