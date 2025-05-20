@@ -2,7 +2,6 @@ jupyterlab
 pyspark==3.5.1         
 openpyxl              
 pyarrow  
-datetime
 pandas==2.2.2
 setuptools==69.2.0
 wheel==0.42.0
