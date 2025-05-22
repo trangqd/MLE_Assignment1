@@ -133,12 +133,10 @@ def process_one(table: str, snapshot: str, spark: SparkSession):
     sdf = spark.read.option("header", "true").csv(str(src))
     sdf = TABLES[table](sdf)
 
-    out_dir = SILVER_ROOT / table
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = SILVER_ROOT / table / f"snapshot_date={snapshot}"
+    sdf.write.mode("overwrite").parquet(str(out_dir))
 
-    out_csv = out_dir / f"silver_{table}_{snapshot.replace('-', '_')}.csv"
-    sdf.toPandas().to_csv(out_csv, index=False)
-    print(f"[WRITE] {table} → {out_csv}")
+    print(f"[WRITE] {table} → {out_dir} (parquet)")
 
 def process_silver_all(snapshot: str, spark: SparkSession):
     for tbl in TABLES:

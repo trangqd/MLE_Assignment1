@@ -1,6 +1,8 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
+from pyspark.sql import SparkSession
+
 
 SILVER_ROOT = Path("data_mart/silver")
 GOLD_OUTPUT_DIR = Path("data_mart/gold/feature_store")
@@ -10,7 +12,15 @@ COLS_WITH_OUTLIERS = [
     "Num_Bank_Accounts", "Num_Credit_Card", "Num_of_Loan", "Num_of_Delayed_Payment"
 ]
 
+# Feature engineering functions
 def engineer_features(df):
+    numeric_cols = [
+        "Monthly_Balance", "Total_EMI_per_month", "Amount_invested_monthly",
+        "Monthly_Inhand_Salary", "Outstanding_Debt"
+    ]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        
     credit_mix_map = {"Bad": 0, "Standard": 1, "Good": 2}
     payment_map = {
         "Low_spent_Small_value_payments": 0,
@@ -40,9 +50,11 @@ def apply_capping_and_flags(df):
     return df
 
 def engineer_lag_rolling_features(df):
+    df["paid_amt"] = pd.to_numeric(df["paid_amt"], errors="coerce")
+    df["due_amt"] = pd.to_numeric(df["due_amt"], errors="coerce")
     df = df.sort_values(["Customer_ID", "snapshot_date"])
     df["payment_ratio"] = df["paid_amt"] / df["due_amt"].replace(0, np.nan)
-    df["shortfall"] = (df["due_amt"] - df["paid_amt"]).clip(lower=0) 
+    df["shortfall"] = (df["due_amt"] - df["paid_amt"]).clip(lower=0)
     df["full_payment"] = (df["paid_amt"] >= df["due_amt"]).astype(int)
     df["overpayment"] = (df["paid_amt"] - df["due_amt"]).clip(lower=0)
     df["missed_payment"] = (df["paid_amt"] < df["due_amt"]).astype(int)
@@ -84,21 +96,21 @@ def save_partitioned_by_month(df, prefix, subfolder):
     folder.mkdir(parents=True, exist_ok=True)
 
     for period, group in df.groupby(df["snapshot_date"].dt.to_period("M")):
-        file_path = folder / f"{prefix}_{period}.csv"
-        group.to_csv(file_path, index=False)
+        file_path = folder / f"{prefix}_{period}.parquet"
+        group.to_parquet(file_path, index=False)
         print(f"[✓] Saved: {file_path} — {group.shape[0]} rows")
 
+
 def load_merged_silver_table(table_name):
+    spark = SparkSession.builder.getOrCreate()
     table_path = SILVER_ROOT / table_name
-    csv_files = list(table_path.glob("silver_*.csv"))
-    df_list = []
 
-    for file in csv_files:
-        df = pd.read_csv(file)
-        df["Customer_ID"] = df["Customer_ID"].astype(str).str.strip().str.lower()
-        df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
-        df_list.append(df)
+    # Recursively load all part files in the table directory
+    sdf = spark.read.option("recursiveFileLookup", "true").parquet(str(table_path))
+    df = sdf.toPandas()
 
-    df_all = pd.concat(df_list, ignore_index=True)
-    df_all = df_all.sort_values(["Customer_ID", "snapshot_date"])
-    return df_all
+    # Normalize
+    df["Customer_ID"] = df["Customer_ID"].astype(str).str.strip().str.lower()
+    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"].astype(str))
+    df = df.sort_values(["Customer_ID", "snapshot_date"])
+    return df

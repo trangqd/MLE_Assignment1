@@ -32,6 +32,7 @@ def process_bronze_tables(spark):
     print(f"[BRONZE] Back-filling Bronze for {len(dates)} months: {dates[0]} → {dates[-1]}")
     process_bronze(dates, spark)
 
+
 def process_silver_tables(spark):
     df_dates = (
         spark.read.option("header", "true")
@@ -46,19 +47,20 @@ def process_silver_tables(spark):
         print(f"[SILVER] Processing {ds}")
         process_silver_all(ds, spark)
 
+
 def process_gold_labels(spark):
     SILVER_LMS_DIR = Path("data_mart/silver/lms_loan_daily")
     dpd_thresh = 30
     mob_filter = 6
 
-    silver_files = list(SILVER_LMS_DIR.glob("silver_lms_loan_daily_*.csv"))
-    if not silver_files:
-        print("[ERROR] No silver LMS files found.")
+    snapshot_dirs = [f for f in SILVER_LMS_DIR.iterdir() if f.is_dir() and f.name.startswith("snapshot_date=")]
+
+    if not snapshot_dirs:
+        print("[ERROR] No silver LMS Parquet folders found.")
         return
 
     snapshot_dates = sorted([
-        f.name.replace("silver_lms_loan_daily_", "").replace(".csv", "").replace("_", "-")
-        for f in silver_files
+        d.name.replace("snapshot_date=", "") for d in snapshot_dirs
     ])
     print(f"[LABEL] Found {len(snapshot_dates)} snapshot dates")
 
@@ -66,18 +68,19 @@ def process_gold_labels(spark):
         print(f"[LABEL] Processing {ds}")
         process_labels_gold_table(ds, spark, dpd=dpd_thresh, mob=mob_filter)
 
+
 def process_gold_feature_files():
     print("[FEATURE STORE] Loading silver tables...")
-    lms = load_merged_silver_table("lms_loan_daily")
-    clk = load_merged_silver_table("feature_clickstream")
-    fin = load_merged_silver_table("features_financials")
+    lms  = load_merged_silver_table("lms_loan_daily")
+    clk  = load_merged_silver_table("feature_clickstream")
+    fin  = load_merged_silver_table("features_financials")
     attr = load_merged_silver_table("features_attributes")
 
-    clk = clk.drop(columns=["snapshot_date"], errors="ignore")
-    fin = fin.drop(columns=["snapshot_date"], errors="ignore")
+    # Clean snapshot column to avoid duplication
+    fin  = fin.drop(columns=["snapshot_date"], errors="ignore")
     attr = attr.drop(columns=["snapshot_date"], errors="ignore")
 
-    df = lms.merge(clk, on="Customer_ID", how="left")
+    df = lms.merge(clk, on=["Customer_ID", "snapshot_date"], how="left")
     df = df.merge(fin, on="Customer_ID", how="left")
     df = df.merge(attr, on="Customer_ID", how="left")
 
@@ -86,18 +89,20 @@ def process_gold_feature_files():
     df = apply_capping_and_flags(df)
     df = engineer_lag_rolling_features(df)
 
-    drop_cols = ["Credit_Mix", "Payment_Behaviour", "age_band", "Occupation", "SSN", "Name", "Type_of_Loan",
-                 "Payment_of_Min_Amount", "Credit_History_Age", "credit_history_months", "Annual Income",
-                 "Num_Bank_Accounts", "Num_Credit_Card", "Num_of_Loan", "Num_of_Delayed_Payment",
-                 "loan_amt", "due_amt", "paid_amt"]
-    df.drop(columns=[col for col in drop_cols if col in df.columns], inplace=True)
+    drop_cols = [
+        "Credit_Mix", "Payment_Behaviour", "age_band", "Occupation", "SSN", "Name", "Type_of_Loan",
+        "Payment_of_Min_Amount", "Credit_History_Age", "credit_history_months", "Annual Income",
+        "Num_Bank_Accounts", "Num_Credit_Card", "Num_of_Loan", "Num_of_Delayed_Payment",
+        "loan_amt", "due_amt", "paid_amt"
+    ]
+    df.drop(columns=[c for c in drop_cols if c in df.columns], inplace=True)
 
-    print("[FEATURE STORE] Splitting train/test and saving by snapshot_date...")
-    
+    print("[FEATURE STORE] Splitting and saving...")
     train, test = split_train_test(df)
     save_partitioned_by_month(train, prefix="gold_train", subfolder="train")
     save_partitioned_by_month(test, prefix="gold_test", subfolder="test")
-    print("[✓] Partitioned train/test CSVs saved to feature_store.")
+    print("DONE!")
+
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "all"

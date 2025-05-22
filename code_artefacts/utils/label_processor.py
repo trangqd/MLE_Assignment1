@@ -1,23 +1,22 @@
 from datetime import datetime
 from pathlib import Path
-
+import shutil
 from pyspark.sql import SparkSession, functions as F
 from pyspark.sql.types import IntegerType, StringType
 
 SILVER_ROOT = Path("data_mart/silver")
-GOLD_ROOT = Path("data_mart/gold")
+GOLD_ROOT   = Path("data_mart/gold")
 LABEL_STORE_DIR = GOLD_ROOT / "label_store"
 
 def process_labels_gold_table(snapshot_date_str: str, spark: SparkSession, dpd: int = 30, mob: int = 6):
-    partition_name = f"silver_lms_loan_daily_{snapshot_date_str.replace('-', '_')}.csv"
-    silver_file = SILVER_ROOT / "lms_loan_daily" / partition_name
+    silver_dir = SILVER_ROOT / "lms_loan_daily" / f"snapshot_date={snapshot_date_str}"
 
-    if not silver_file.exists():
-        print(f"[SKIP] {silver_file} does not exist.")
+    if not silver_dir.exists():
+        print(f"[SKIP] {silver_dir} does not exist.")
         return None
 
-    df = spark.read.option("header", "true").csv(str(silver_file))
-    print(f"[LOAD] snapshot {snapshot_date_str} — {df.count()} rows from {silver_file}")
+    df = spark.read.parquet(str(silver_dir))
+    print(f"[LOAD] snapshot {snapshot_date_str} — {df.count()} rows from {silver_dir}")
 
     df = df.withColumn("mob", F.col("mob").cast(IntegerType()))
     df = df.withColumn("dpd", F.col("dpd").cast(IntegerType()))
@@ -29,10 +28,14 @@ def process_labels_gold_table(snapshot_date_str: str, spark: SparkSession, dpd: 
 
     df = df.select("loan_id", "Customer_ID", "label", "label_def", "snapshot_date")
 
-    # Write label to gold output
-    LABEL_STORE_DIR.mkdir(parents=True, exist_ok=True)
-    out_file = LABEL_STORE_DIR / f"gold_label_store_{snapshot_date_str.replace('-', '_')}.csv"
-    df.toPandas().to_csv(out_file, index=False)
+    # Write as Parquet partitioned by snapshot_date
+    out_path = LABEL_STORE_DIR / f"snapshot_date={snapshot_date_str}"
+    out_path_str = str(out_path)
+    
+    if out_path.exists():
+        shutil.rmtree(out_path)
+    
+    df.write.mode("overwrite").parquet(out_path_str)
 
-    print(f"[SAVE] {out_file} ({df.count()} rows)")
+    print(f"[SAVE] {out_path}/snapshot_date={snapshot_date_str} ({df.count()} rows)")
     return df
